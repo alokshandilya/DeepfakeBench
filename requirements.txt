@@ -1,0 +1,39 @@
+dlib==19.24.6
+imageio==2.9.0
+imgaug==0.4.0
+scipy==1.7.3
+seaborn==0.11.2
+pyyaml==6.0
+imutils==0.5.4
+opencv-python==4.6.0.66
+scikit-image==0.19.2
+scikit-learn==1.0.2
+efficientnet-pytorch==0.7.1
+timm==0.6.12
+segmentation-models-pytorch==0.3.2
+torchtoolbox==0.1.8.2
+tensorboard==2.10.1
+setuptools==59.5.0
+loralib
+pytorchvideo
+einops
+transformers
+filterpy
+simplejson
+kornia
+# CLIP must be installed via git, typically put at the end or run separately
+git+https://github.com/openai/CLIP.git
+
+ + annotated-doc==0.0.4
+ + annotated-types==0.7.0
+ + anyio==4.5.2
+ + click==8.1.8
+ + exceptiongroup==1.3.1
+ + fastapi==0.124.4
+ + h11==0.16.0
+ + pydantic==2.10.6
+ + pydantic-core==2.27.2
+ + python-multipart==0.0.20
+ + sniffio==1.3.1
+ + starlette==0.44.0
+ + uvicorn==0.33.0
