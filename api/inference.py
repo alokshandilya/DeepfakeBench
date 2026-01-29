@@ -26,10 +26,10 @@ except ImportError:
 
 # Import model components from the DeepfakeBench training codebase
 # These imports rely on 'training_dir' being in sys.path
-from detectors.xception_detector import XceptionDetector
+from detectors.effort_detector import EffortDetector
 
 class DeepfakeDetector:
-    def __init__(self, model_weights_path, predictor_path, pretrained_imagenet_path, device=None):
+    def __init__(self, model_weights_path, predictor_path, device=None):
         if device:
             self.device = torch.device(device)
         else:
@@ -41,34 +41,32 @@ class DeepfakeDetector:
         print("Initializing Face Extractor...")
         self.face_extractor = FaceExtractor(predictor_path)
 
-        # Configuration for Xception
-        # This mimics the structure expected by XceptionDetector.__init__
+        # Configuration for Effort
         self.config = {
-            'model_name': 'xception',
-            'backbone_name': 'xception',
+            'model_name': 'effort',
+            'backbone_name': 'vit',
             'backbone_config': {
                 'mode': 'original',
                 'num_classes': 2,
                 'inc': 3,
                 'dropout': False
             },
-            'pretrained': pretrained_imagenet_path, # Path to ImageNet weights for backbone init
-            'loss_func': 'cross_entropy', # Required by __init__ even if not used for inference
-            'manualSeed': 1024
+            # 'pretrained': '...' # Not used by EffortDetector in the same way, handled internally or via transformers
         }
         
-        print("Initializing Xception Model...")
-        # This will load the backbone with ImageNet weights first
-        self.model = XceptionDetector(self.config)
+        print("Initializing Effort Model (this may download the base CLIP model from HuggingFace)...")
+        self.model = EffortDetector(self.config)
         
         # Now load the specific Deepfake Detection trained weights
         print(f"Loading trained weights from {model_weights_path}...")
         try:
             ckpt = torch.load(model_weights_path, map_location=self.device)
             
-            # Handle different checkpoint formats (full checkpoint vs state_dict)
+            # Handle different checkpoint formats
             if isinstance(ckpt, dict) and 'state_dict' in ckpt:
                 state_dict = ckpt['state_dict']
+            elif isinstance(ckpt, dict) and 'model' in ckpt:
+                 state_dict = ckpt['model']
             else:
                 state_dict = ckpt
                 
@@ -88,12 +86,16 @@ class DeepfakeDetector:
         self.model.eval()
         
         # Define transforms
-        # Based on training/config/detector/xception.yaml
-        mean = [0.5, 0.5, 0.5]
-        std = [0.5, 0.5, 0.5]
+        # For Effort (based on CLIP), we typically use:
+        # Mean: [0.48145466, 0.4578275, 0.40821073]
+        # Std: [0.26862954, 0.26130258, 0.27577711]
+        # Resolution: 224x224
+        
+        mean = [0.48145466, 0.4578275, 0.40821073]
+        std = [0.26862954, 0.26130258, 0.27577711]
         
         self.transform = T.Compose([
-            T.Resize((256, 256)), 
+            T.Resize((224, 224)), 
             T.ToTensor(),
             T.Normalize(mean=mean, std=std)
         ])
@@ -142,12 +144,12 @@ class DeepfakeDetector:
                 'error': 'Preprocessing failed.'
             }
             
-        batch_input = torch.stack(processed_faces).to(self.device) # (N, 3, 256, 256)
+        batch_input = torch.stack(processed_faces).to(self.device) # (N, 3, 224, 224)
         
         # 3. Inference
         try:
             with torch.no_grad():
-                # XceptionDetector.forward expects a data_dict with 'image' key
+                # Forward expects a data_dict with 'image' key
                 data_dict = {'image': batch_input}
                 
                 # forward(..., inference=True) returns:
@@ -166,7 +168,8 @@ class DeepfakeDetector:
             return {
                 'is_fake': is_fake,
                 'fake_probability': avg_prob,
-                'frames_processed': len(faces)
+                'frames_processed': len(faces),
+                'model_used': 'Effort (ICML 2025 Spotlight)'
             }
         except Exception as e:
             return {

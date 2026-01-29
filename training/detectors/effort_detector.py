@@ -46,7 +46,12 @@ class EffortDetector(nn.Module):
         # std: [0.26862954, 0.26130258, 0.27577711]
         
         # ViT-L/14 224*224
-        clip_model = CLIPModel.from_pretrained("../../huggingface/hub/models--openai--clip-vit-large-patch14/snapshots/32bd64288804d66eefd0ccbe215aa642df71cc41/")
+        try:
+            clip_model = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
+        except Exception:
+            # Fallback or retry if connection fails, but typically from_pretrained handles it.
+            # If the user has it locally in cache, it uses it.
+            clip_model = CLIPModel.from_pretrained("openai/clip-vit-large-patch14", local_files_only=True)
 
         # Apply SVD to self_attn layers only
         # ViT-L/14 224*224: 1024-1

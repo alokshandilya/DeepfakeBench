@@ -5,16 +5,12 @@ from tqdm import tqdm
 
 # URLs
 PREDICTOR_URL = "https://github.com/SCLBD/DeepfakeBench/releases/download/v1.0.0/shape_predictor_81_face_landmarks.dat"
-XCEPTION_WEIGHTS_URL = "https://github.com/SCLBD/DeepfakeBench/releases/download/v1.0.1/xception_best.pth"
-IMAGENET_XCEPTION_URL = "http://data.lip6.fr/cadene/pretrainedmodels/xception-b5690688.pth"
 
 # Paths relative to project root
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PREDICTOR_PATH = os.path.join(PROJECT_ROOT, "preprocessing/dlib_tools/shape_predictor_81_face_landmarks.dat")
 WEIGHTS_DIR = os.path.join(PROJECT_ROOT, "training/weights")
-WEIGHTS_PATH = os.path.join(WEIGHTS_DIR, "xception_best.pth")
-PRETRAINED_DIR = os.path.join(PROJECT_ROOT, "training/pretrained")
-PRETRAINED_PATH = os.path.join(PRETRAINED_DIR, "xception-b5690688.pth")
+EFFORT_WEIGHTS_PATH = os.path.join(WEIGHTS_DIR, "effort_clip_L14_trainOn_FaceForensic.pth")
 
 class DownloadProgressBar(tqdm):
     def update_to(self, b=1, bsize=1, tsize=None):
@@ -50,20 +46,23 @@ def download_file(url, output_path):
 def check_and_download_dependencies():
     """
     Checks for necessary files and downloads them if missing.
-    Returns the paths to the predictor, the model weights, and the pretrained weights.
+    Returns the paths to the predictor and the model weights.
     """
     print("Checking dependencies...")
     
     # 1. Dlib Shape Predictor
     download_file(PREDICTOR_URL, PREDICTOR_PATH)
     
-    # 2. Xception Deepfake Detection Weights
-    download_file(XCEPTION_WEIGHTS_URL, WEIGHTS_PATH)
+    # 2. Effort Model Weights (Manual Check)
+    if not os.path.exists(EFFORT_WEIGHTS_PATH):
+        raise FileNotFoundError(
+            f"Effort model weights not found at {EFFORT_WEIGHTS_PATH}. "
+            "Please download 'effort_clip_L14_trainOn_FaceForensic.pth' manually and place it there."
+        )
+    else:
+        print(f"Found Effort model weights at {EFFORT_WEIGHTS_PATH}")
 
-    # 3. ImageNet Pretrained Weights (required for model initialization)
-    download_file(IMAGENET_XCEPTION_URL, PRETRAINED_PATH)
-
-    return PREDICTOR_PATH, WEIGHTS_PATH, PRETRAINED_PATH
+    return PREDICTOR_PATH, EFFORT_WEIGHTS_PATH
 
 if __name__ == "__main__":
     check_and_download_dependencies()

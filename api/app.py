@@ -36,14 +36,13 @@ async def lifespan(app: FastAPI):
     global detector
     print("Startup: Checking and downloading dependencies...")
     try:
-        predictor_path, weights_path, pretrained_path = check_and_download_dependencies()
+        predictor_path, weights_path = check_and_download_dependencies()
         
-        print("Startup: Initializing DeepfakeDetector...")
+        print("Startup: Initializing DeepfakeDetector (Effort Model)...")
         # Initialize the detector and store it in the app state
         detector = DeepfakeDetector(
             model_weights_path=weights_path, 
-            predictor_path=predictor_path,
-            pretrained_imagenet_path=pretrained_path
+            predictor_path=predictor_path
         )
         print("Startup: Model initialized successfully.")
     except Exception as e:
