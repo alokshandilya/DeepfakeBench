@@ -112,4 +112,5 @@ async def detect_deepfake(file: UploadFile = File(...)):
                 print(f"Cleaned up temp file: {temp_video_path}")
 
 if __name__ == "__main__":
-    uvicorn.run("api.app:app", host="0.0.0.0", port=8000, reload=False)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("api.app:app", host="0.0.0.0", port=port, reload=False)

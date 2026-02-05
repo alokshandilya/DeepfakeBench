@@ -116,8 +116,8 @@ class DeepfakeDetector:
             }
         """
         # 1. Extract faces
-        # We process a subset of frames (e.g., 30) to save time
-        faces = self.face_extractor.extract_faces(video_path, num_frames=30)
+        # We process a subset of frames (e.g., 5) to save time
+        faces = self.face_extractor.extract_faces(video_path, num_frames=5)
         
         if not faces:
             return {
