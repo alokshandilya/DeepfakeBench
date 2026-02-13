@@ -171,3 +171,25 @@ class FaceExtractor:
         
         cap.release()
         return extracted_faces
+
+    def extract_faces_from_image(self, image_path):
+        """
+        Extract aligned faces from a single image file.
+        Returns a list of numpy arrays (RGB images).
+        """
+        # cv2.imread loads in BGR format
+        frame = cv2.imread(image_path)
+        if frame is None:
+            print(f"Error opening image file {image_path}")
+            return []
+
+        extracted_faces = []
+        try:
+            # extract_aligned_face_dlib expects BGR image
+            face, landmarks, _ = extract_aligned_face_dlib(self.face_detector, self.face_predictor, frame)
+            if face is not None:
+                extracted_faces.append(face)
+        except Exception as e:
+            print(f"Error processing image {image_path}: {e}")
+        
+        return extracted_faces

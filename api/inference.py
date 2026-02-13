@@ -178,3 +178,81 @@ class DeepfakeDetector:
                 'frames_processed': len(faces),
                 'error': f"Inference failed: {str(e)}"
             }
+
+    def predict_image(self, image_path):
+        """
+        Run deepfake detection on an image file.
+        
+        Args:
+            image_path (str): Path to the input image.
+            
+        Returns:
+            dict: {
+                'is_fake': bool,
+                'fake_probability': float,
+                'frames_processed': int,
+                'error': str (optional)
+            }
+        """
+        # 1. Extract faces
+        faces = self.face_extractor.extract_faces_from_image(image_path)
+        
+        if not faces:
+            return {
+                'is_fake': False,
+                'fake_probability': 0.0,
+                'frames_processed': 0,
+                'error': 'No faces detected in the image.'
+            }
+
+        # 2. Preprocess faces
+        processed_faces = []
+        for face_img in faces:
+            # face_img is RGB numpy array (H, W, 3)
+            pil_img = Image.fromarray(face_img)
+            tensor_img = self.transform(pil_img)
+            processed_faces.append(tensor_img)
+            
+        # Stack into batch
+        if not processed_faces:
+             return {
+                'is_fake': False,
+                'fake_probability': 0.0,
+                'frames_processed': 0,
+                'error': 'Preprocessing failed.'
+            }
+            
+        batch_input = torch.stack(processed_faces).to(self.device) # (N, 3, 224, 224)
+        
+        # 3. Inference
+        try:
+            with torch.no_grad():
+                # Forward expects a data_dict with 'image' key
+                data_dict = {'image': batch_input}
+                
+                # forward(..., inference=True) returns:
+                # {'cls': pred, 'prob': prob, 'feat': features}
+                # prob is softmaxed probability for class 1 (Fake)
+                output = self.model(data_dict, inference=True)
+                probs = output['prob'] # Shape (N,)
+                
+            # 4. Aggregate results
+            # Simple average of probabilities across all faces (usually just 1 for image)
+            avg_prob = torch.mean(probs).item()
+            
+            # Threshold usually 0.5
+            is_fake = avg_prob > 0.5
+            
+            return {
+                'is_fake': is_fake,
+                'fake_probability': avg_prob,
+                'frames_processed': len(faces),
+                'model_used': 'Effort (ICML 2025 Spotlight)'
+            }
+        except Exception as e:
+            return {
+                'is_fake': False,
+                'fake_probability': 0.0,
+                'frames_processed': len(faces),
+                'error': f"Inference failed: {str(e)}"
+            }
