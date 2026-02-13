@@ -146,12 +146,12 @@ async def detect_deepfake(request: Request):
             print(f"Cleaned up temp file: {temp_path}")
 
 @app.post("/detect_image")
-async def detect_deepfake_image(request: Request):
+async def detect_deepfake_image(file: UploadFile = File(...)):
     """
     Endpoint to detect if an image is a deepfake.
     
     Args:
-        request (Request): The request object containing either a JSON body with 'file_path' or a file upload.
+        file (UploadFile): The image file uploaded via multipart/form-data.
         
     Returns:
         JSON object containing 'is_fake', 'fake_probability', and 'frames_processed'.
@@ -159,51 +159,24 @@ async def detect_deepfake_image(request: Request):
     if detector is None:
         raise HTTPException(status_code=503, detail="Model not initialized.")
 
-    content_type = request.headers.get("content-type", "")
     target_path = None
     temp_path = None
     should_cleanup = False
 
     try:
-        if "application/json" in content_type:
-            try:
-                data = await request.json()
-            except Exception:
-                raise HTTPException(status_code=400, detail="Invalid JSON body")
-            
-            if "file_path" in data:
-                target_path = data["file_path"]
-                if not os.path.exists(target_path):
-                    raise HTTPException(status_code=400, detail=f"File not found at path: {target_path}")
-                print(f"Processing image from path: {target_path}")
-            else:
-                 raise HTTPException(status_code=400, detail="JSON body must contain 'file_path'")
-
-        elif "multipart/form-data" in content_type:
-            form = await request.form()
-            file = form.get("file")
-            
-            if not file:
-                raise HTTPException(status_code=400, detail="No file provided in form data")
-
-            if isinstance(file, str) or not hasattr(file, "filename"):
-                raise HTTPException(status_code=400, detail="Form field 'file' must be a file upload")
-
-            # Create a temporary file to save the uploaded image
-            suffix = os.path.splitext(file.filename)[1] if file.filename else ".jpg"
-            
-            # Using tempfile.NamedTemporaryFile with delete=False
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-            try:
-                shutil.copyfileobj(file.file, temp_file)
-                temp_path = temp_file.name
-                target_path = temp_path
-                should_cleanup = True
-                print(f"Processing uploaded image: {file.filename} (saved to {temp_path})")
-            finally:
-                temp_file.close()
-        else:
-             raise HTTPException(status_code=400, detail="Content-Type must be application/json or multipart/form-data")
+        # Create a temporary file to save the uploaded image
+        suffix = os.path.splitext(file.filename)[1] if file.filename else ".jpg"
+        
+        # Using tempfile.NamedTemporaryFile with delete=False
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        try:
+            shutil.copyfileobj(file.file, temp_file)
+            temp_path = temp_file.name
+            target_path = temp_path
+            should_cleanup = True
+            print(f"Processing uploaded image: {file.filename} (saved to {temp_path})")
+        finally:
+            temp_file.close()
 
         # Run prediction
         result = detector.predict_image(target_path)
