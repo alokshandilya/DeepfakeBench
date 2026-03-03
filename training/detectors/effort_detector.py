@@ -32,6 +32,11 @@ class EffortDetector(nn.Module):
     def __init__(self, config=None):
         super(EffortDetector, self).__init__()
         self.config = config
+        
+        # Optimization: Determine device for initialization (specifically for SVD)
+        self.init_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        logger.info(f"Initializing EffortDetector. SVD calculations will use: {self.init_device}")
+
         self.backbone = self.build_backbone(config)
         self.head = nn.Linear(1024, 2)
         self.loss_func = nn.CrossEntropyLoss()
@@ -42,9 +47,7 @@ class EffortDetector(nn.Module):
         # Download model
         # https://huggingface.co/openai/clip-vit-large-patch14
         
-        # mean: [0.48145466, 0.4578275, 0.40821073]
-        # std: [0.26862954, 0.26130258, 0.27577711]
-        
+        logger.info("Loading CLIP model from pretrained...")
         # ViT-L/14 224*224
         try:
             clip_model = CLIPModel.from_pretrained("openai/clip-vit-large-patch14")
@@ -55,13 +58,27 @@ class EffortDetector(nn.Module):
 
         # Apply SVD to self_attn layers only
         # ViT-L/14 224*224: 1024-1
-        clip_model.vision_model = apply_svd_residual_to_self_attn(clip_model.vision_model, r=1024-1)
+        logger.info("Applying SVD to self_attn layers (this might take a moment)...")
+        
+        # Optimization: Use no_grad for initialization logic
+        with torch.no_grad():
+            clip_model.vision_model = apply_svd_residual_to_self_attn(
+                clip_model.vision_model, 
+                r=1024-1, 
+                device=self.init_device
+            )
 
+        # Freeze non-residual parameters
         for name, param in clip_model.vision_model.named_parameters():
-            print('{}: {}'.format(name, param.requires_grad))
+            if any(x in name for x in ['S_residual', 'U_residual', 'V_residual']):
+                param.requires_grad = True
+            else:
+                param.requires_grad = False
+
+        # Logging parameter counts
         num_param = sum(p.numel() for p in clip_model.vision_model.parameters() if p.requires_grad)
         num_total_param = sum(p.numel() for p in clip_model.vision_model.parameters())
-        print('Number of total parameters: {}, tunable parameters: {}'.format(num_total_param, num_param))
+        logger.info('Number of total parameters: {}, tunable parameters: {}'.format(num_total_param, num_param))
 
         return clip_model.vision_model
 
@@ -71,26 +88,6 @@ class EffortDetector(nn.Module):
 
     def classifier(self, features: torch.tensor) -> torch.tensor:
         return self.head(features)
-
-    # def get_losses(self, data_dict: dict, pred_dict: dict) -> dict:
-    #     label = data_dict['label']
-    #     pred = pred_dict['cls']
-    #     loss = self.loss_func(pred, label)
-        
-    #     # Regularization term
-    #     lambda_reg = 0.1
-    #     orthogonal_losses = []
-    #     for module in self.backbone.modules():
-    #         if isinstance(module, SVDResidualLinear):
-    #             # Apply orthogonal constraints to the U_residual and V_residual matrix
-    #             orthogonal_losses.append(module.compute_orthogonal_loss())
-        
-    #     if orthogonal_losses:
-    #         reg_term = sum(orthogonal_losses)
-    #         loss += lambda_reg * reg_term
-        
-    #     loss_dict = {'overall': loss}
-    #     return loss_dict
 
     def compute_weight_loss(self):
         weight_sum_dict = {}
@@ -141,10 +138,6 @@ class EffortDetector(nn.Module):
             # No fake samples in batch
             loss_fake = torch.tensor(0.0, device=pred.device)
         
-
-        # loss2 = self.compute_weight_loss()
-        # overall_loss = loss + loss2
-
         # Return a dictionary with all losses
         loss_dict = {
             'overall': loss,
@@ -230,47 +223,56 @@ class SVDResidualLinear(nn.Module):
         return loss
         
 
-# Function to replace nn.Linear modules within self_attn modules with SVDResidualLinear
-def apply_svd_residual_to_self_attn(model, r):
-    for name, module in model.named_children():
+# Function to recursively find 'self_attn' modules and replace Linear layers within them
+def apply_svd_residual_to_self_attn(module, r, device=torch.device('cpu')):
+    for name, child in module.named_children():
         if 'self_attn' in name:
-            # Replace nn.Linear layers in this module
-            for sub_name, sub_module in module.named_modules():
-                if isinstance(sub_module, nn.Linear):
-                    # Get parent module within self_attn
-                    parent_module = module
-                    sub_module_names = sub_name.split('.')
-                    for module_name in sub_module_names[:-1]:
-                        parent_module = getattr(parent_module, module_name)
-                    # Replace the nn.Linear layer with SVDResidualLinear
-                    setattr(parent_module, sub_module_names[-1], replace_with_svd_residual(sub_module, r))
+            # Found a self_attn block. 
+            # Recursively replace ALL Linear layers inside this block.
+            replace_all_linear_layers(child, r, device)
         else:
-            # Recursively apply to child modules
-            apply_svd_residual_to_self_attn(module, r)
-    # After replacing, set requires_grad for residual components
-    for param_name, param in model.named_parameters():
-        if any(x in param_name for x in ['S_residual', 'U_residual', 'V_residual']):
-            param.requires_grad = True
+            # Keep searching
+            apply_svd_residual_to_self_attn(child, r, device)
+            
+    return module
+
+
+def replace_all_linear_layers(module, r, device):
+    """
+    Recursively replaces all nn.Linear layers in the module with SVDResidualLinear.
+    """
+    for name, child in module.named_children():
+        if isinstance(child, nn.Linear):
+            # Replace
+            new_layer = replace_with_svd_residual(child, r, device)
+            setattr(module, name, new_layer)
         else:
-            param.requires_grad = False
-    return model
+            # Recurse
+            replace_all_linear_layers(child, r, device)
 
 
 # Function to replace a module with SVDResidualLinear
-def replace_with_svd_residual(module, r):
+def replace_with_svd_residual(module, r, device):
     if isinstance(module, nn.Linear):
         in_features = module.in_features
         out_features = module.out_features
         bias = module.bias is not None
 
+        # Capture original device to restore tensors later if needed
+        original_device = module.weight.device
+        
         # Create SVDResidualLinear module
-        new_module = SVDResidualLinear(in_features, out_features, r, bias=bias, init_weight=module.weight.data.clone())
+        # We start on CPU (or original device) to match expected model state, but init_weight is set below
+        new_module = SVDResidualLinear(in_features, out_features, r, bias=bias, init_weight=None)
 
         if bias and module.bias is not None:
             new_module.bias.data.copy_(module.bias.data)
 
-        # Perform SVD on the original weight
-        U, S, Vh = torch.linalg.svd(module.weight.data, full_matrices=False)
+        # Move weight to the specified compute device (e.g., GPU) for faster SVD
+        weight_data = module.weight.data.to(device)
+
+        # Perform SVD on the weight
+        U, S, Vh = torch.linalg.svd(weight_data, full_matrices=False)
 
         # Determine r based on the rank of the weight matrix
         r = min(r, len(S))  # Ensure r does not exceed the number of singular values
@@ -283,8 +285,8 @@ def replace_with_svd_residual(module, r):
         # Reconstruct the main weight (fixed)
         weight_main = U_r @ torch.diag(S_r) @ Vh_r
 
-        # Set the main weight
-        new_module.weight_main.data.copy_(weight_main)
+        # Copy back to the new module's device (usually CPU at this stage)
+        new_module.weight_main.data.copy_(weight_main.to(original_device))
 
         # Residual components (trainable)
         U_residual = U[:, r:]    # Shape: (out_features, n - r)
@@ -293,10 +295,10 @@ def replace_with_svd_residual(module, r):
 
         if len(S_residual) > 0:
             # S_residual is trainable
-            new_module.S_residual = nn.Parameter(S_residual.clone())
+            new_module.S_residual = nn.Parameter(S_residual.to(original_device))
             # U_residual and V_residual are also trainable
-            new_module.U_residual = nn.Parameter(U_residual.clone())
-            new_module.V_residual = nn.Parameter(Vh_residual.clone())
+            new_module.U_residual = nn.Parameter(U_residual.to(original_device))
+            new_module.V_residual = nn.Parameter(Vh_residual.to(original_device))
         else:
             # If no residual components, set placeholders
             new_module.S_residual = None
