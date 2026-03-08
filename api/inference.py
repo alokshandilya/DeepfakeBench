@@ -256,3 +256,128 @@ class DeepfakeDetector:
                 'frames_processed': len(faces),
                 'error': f"Inference failed: {str(e)}"
             }
+
+    def predict_batch(self, image_paths):
+        """
+        Run deepfake detection on a batch of image files.
+        Optimized to run inference on all faces from all images in a single batch.
+        
+        Args:
+            image_paths (List[str]): List of paths to input images.
+            
+        Returns:
+            List[dict]: List of result dictionaries corresponding to input images.
+        """
+        results = [None] * len(image_paths)
+        all_processed_faces = []
+        # Stores (image_index, face_count) to map back results
+        image_face_map = [] 
+        
+        # 1. Extract and preprocess faces (CPU bound part)
+        for idx, image_path in enumerate(image_paths):
+            try:
+                # We reuse the extraction logic but need to handle exceptions per file
+                if not os.path.exists(image_path):
+                    # If file doesn't exist, we can't process it
+                    results[idx] = {
+                        'file_path': image_path,
+                        'is_fake': False,
+                        'fake_probability': 0.0,
+                        'frames_processed': 0,
+                        'error': 'File not found.'
+                    }
+                    image_face_map.append((idx, 0))
+                    continue
+
+                faces = self.face_extractor.extract_faces_from_image(image_path)
+                
+                if not faces:
+                    results[idx] = {
+                        'file_path': image_path,
+                        'is_fake': False,
+                        'fake_probability': 0.0,
+                        'frames_processed': 0,
+                        'error': 'No faces detected.'
+                    }
+                    image_face_map.append((idx, 0))
+                    continue
+
+                # Preprocess faces
+                current_image_faces = []
+                for face_img in faces:
+                    pil_img = Image.fromarray(face_img)
+                    tensor_img = self.transform(pil_img)
+                    current_image_faces.append(tensor_img)
+                
+                all_processed_faces.extend(current_image_faces)
+                image_face_map.append((idx, len(current_image_faces)))
+                
+            except Exception as e:
+                results[idx] = {
+                    'file_path': image_path,
+                    'is_fake': False,
+                    'fake_probability': 0.0,
+                    'frames_processed': 0,
+                    'error': str(e)
+                }
+                image_face_map.append((idx, 0))
+
+        # If no faces found in any images
+        if not all_processed_faces:
+            # Fill remaining Nones with defaults if any logic slipped
+            for i in range(len(results)):
+                if results[i] is None:
+                    results[i] = {
+                        'file_path': image_paths[i],
+                        'is_fake': False,
+                        'fake_probability': 0.0,
+                        'frames_processed': 0,
+                        'error': 'No faces processed.'
+                    }
+            return results
+
+        # 2. Batch Inference (GPU bound part)
+        try:
+            batch_input = torch.stack(all_processed_faces).to(self.device)
+            
+            with torch.no_grad():
+                data_dict = {'image': batch_input}
+                output = self.model(data_dict, inference=True)
+                probs = output['prob'] # Shape (Total_Faces,)
+                
+            # 3. Distribute results
+            current_face_ptr = 0
+            for idx, face_count in image_face_map:
+                if face_count == 0:
+                    continue
+                    
+                # Slice the probabilities for this image
+                img_probs = probs[current_face_ptr : current_face_ptr + face_count]
+                current_face_ptr += face_count
+                
+                # Aggregate
+                avg_prob = torch.mean(img_probs).item()
+                is_fake = avg_prob > 0.5
+                
+                results[idx] = {
+                    'file_path': image_paths[idx],
+                    'is_fake': is_fake,
+                    'fake_probability': avg_prob,
+                    'frames_processed': face_count,
+                    'model_used': 'Effort (ICML 2025 Spotlight)'
+                }
+
+        except Exception as e:
+            # Fatal inference error affecting all remaining
+            err_msg = f"Batch inference failed: {str(e)}"
+            for i in range(len(results)):
+                if results[i] is None:
+                    results[i] = {
+                        'file_path': image_paths[i],
+                        'is_fake': False,
+                        'fake_probability': 0.0,
+                        'frames_processed': 0,
+                        'error': err_msg
+                    }
+        
+        return results
