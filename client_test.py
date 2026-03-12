@@ -135,9 +135,22 @@ async def process_all_images(image_directory: str):
         
         # Count fakes
         fakes = sum(1 for r in final_results if r.get('is_fake', False))
-        errors = sum(1 for r in final_results if 'error' in r)
+        
+        # Collect errors
+        error_results = [r for r in final_results if 'error' in r]
+        errors = len(error_results)
+        
         print(f"Detected as Fake       : {fakes}")
         print(f"Processing Errors      : {errors}")
+        
+        if errors > 0:
+            print("\n" + "-"*40)
+            print("ERROR DETAILS:")
+            print("-"*40)
+            for err in error_results:
+                filename = err.get('filename') or err.get('file_path', 'Unknown file')
+                error_msg = err.get('error', 'Unknown error')
+                print(f"- {filename}: {error_msg}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="DeepfakeBench API Load Tester")
