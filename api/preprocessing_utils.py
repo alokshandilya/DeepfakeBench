@@ -1,33 +1,11 @@
 import cv2
-import dlib
+import torch
 import numpy as np
 from skimage import transform as trans
-from imutils import face_utils
 import os
+from facenet_pytorch import MTCNN
 
-def get_keypts(image, face, predictor, face_detector):
-    # detect the facial landmarks for the selected face
-    shape = predictor(image, face)
-    
-    # select the key points for the eyes, nose, and mouth
-    # The indices seem to be 1-based in some docs but 0-based in dlib access?
-    # Dlib 68 point predictor:
-    # 36-41: Left eye (so 37 is a point on left eye)
-    # 42-47: Right eye (so 44 is a point on right eye)
-    # 27-35: Nose (30 is nose tip)
-    # 48-67: Mouth (49 is top lip left, 55 is top lip right/corner)
-    
-    leye = np.array([shape.part(37).x, shape.part(37).y]).reshape(-1, 2)
-    reye = np.array([shape.part(44).x, shape.part(44).y]).reshape(-1, 2)
-    nose = np.array([shape.part(30).x, shape.part(30).y]).reshape(-1, 2)
-    lmouth = np.array([shape.part(49).x, shape.part(49).y]).reshape(-1, 2)
-    rmouth = np.array([shape.part(55).x, shape.part(55).y]).reshape(-1, 2)
-    
-    pts = np.concatenate([leye, reye, nose, lmouth, rmouth], axis=0)
-
-    return pts
-
-def extract_aligned_face_dlib(face_detector, predictor, image, res=256, mask=None):
+def extract_aligned_face_mtcnn(mtcnn, image, res=256, mask=None):
     def img_align_crop(img, landmark=None, outsize=None, scale=1.3, mask=None):
         """ 
         align and crop the face according to the given bbox and landmarks
@@ -88,39 +66,23 @@ def extract_aligned_face_dlib(face_detector, predictor, image, res=256, mask=Non
     # Convert to rgb
     rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
-    # Detect with dlib
-    faces = face_detector(rgb, 1)
-    if len(faces):
-        # For now only take the biggest face
-        face = max(faces, key=lambda rect: rect.width() * rect.height())
+    # Detect with MTCNN
+    boxes, probs, landmarks = mtcnn.detect(rgb, landmarks=True)
+    if boxes is not None and len(boxes) > 0:
+        # Align and crop the face using the 5 landmarks natively provided by MTCNN
+        # landmarks[0] is the landmarks for the largest face
+        cropped_face, mask_face = img_align_crop(rgb, landmarks[0], outsize=(res, res), mask=mask)
         
-        # Get the landmarks/parts for the face in box d only with the five key points
-        landmarks = get_keypts(rgb, face, predictor, face_detector)
-
-        # Align and crop the face
-        cropped_face, mask_face = img_align_crop(rgb, landmarks, outsize=(res, res), mask=mask)
-        
-        # NOTE: cropped_face is currently RGB because we passed 'rgb' to img_align_crop.
-        # We will return it as RGB, suitable for PIL conversion.
-
-        # Extract the all landmarks from the aligned face (optional, kept for compatibility if needed)
-        # face_align = face_detector(cropped_face, 1)
-        # if len(face_align) == 0:
-        #     return None, None, None
-        # landmark = predictor(cropped_face, face_align[0])
-        # landmark = face_utils.shape_to_np(landmark)
-
-        return cropped_face, landmarks, mask_face
-    
+        return cropped_face, landmarks[0], mask_face
     else:
         return None, None, None
 
 class FaceExtractor:
-    def __init__(self, predictor_path):
-        self.face_detector = dlib.get_frontal_face_detector()
-        if not os.path.exists(predictor_path):
-            raise FileNotFoundError(f"Predictor not found at {predictor_path}")
-        self.face_predictor = dlib.shape_predictor(predictor_path)
+    def __init__(self, predictor_path=None):
+        # predictor_path is ignored now since we use MTCNN
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        # Initialize MTCNN. select_largest=True ensures it returns the biggest face first.
+        self.mtcnn = MTCNN(keep_all=True, select_largest=True, device=self.device)
 
     def extract_faces(self, video_path, num_frames=30):
         """
@@ -159,7 +121,7 @@ class FaceExtractor:
                 # In extract_aligned_face_dlib: rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
                 # So we pass BGR 'frame' directly.
                 try:
-                    face, landmarks, _ = extract_aligned_face_dlib(self.face_detector, self.face_predictor, frame)
+                    face, landmarks, _ = extract_aligned_face_mtcnn(self.mtcnn, frame)
                     if face is not None:
                         extracted_faces.append(face)
                 except Exception as e:
@@ -185,8 +147,8 @@ class FaceExtractor:
 
         extracted_faces = []
         try:
-            # extract_aligned_face_dlib expects BGR image
-            face, landmarks, _ = extract_aligned_face_dlib(self.face_detector, self.face_predictor, frame)
+            # extract_aligned_face_mtcnn expects BGR image (it converts internally)
+            face, landmarks, _ = extract_aligned_face_mtcnn(self.mtcnn, frame)
             if face is not None:
                 extracted_faces.append(face)
         except Exception as e:
