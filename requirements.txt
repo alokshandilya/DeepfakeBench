@@ -103,7 +103,7 @@ rsa==4.9.1
 safetensors==0.5.3
 scikit-image==0.19.2
 scikit-learn==1.0.2
-scipy==1.7.3
+scipy==1.10.1
 seaborn==0.11.2
 segmentation-models-pytorch==0.3.2
 setuptools==59.5.0
