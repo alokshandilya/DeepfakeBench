@@ -274,54 +274,59 @@ class DeepfakeDetector:
         # Stores (image_index, face_count) to map back results
         image_face_map = [] 
         
-        # 1. Extract and preprocess faces (CPU bound part)
-        for idx, image_path in enumerate(image_paths):
+        def process_image(idx, image_path):
             try:
-                # We reuse the extraction logic but need to handle exceptions per file
                 if not os.path.exists(image_path):
-                    # If file doesn't exist, we can't process it
-                    results[idx] = {
+                    return idx, {
                         'file_path': image_path,
                         'is_fake': False,
                         'fake_probability': 0.0,
                         'frames_processed': 0,
                         'error': 'File not found.'
-                    }
-                    image_face_map.append((idx, 0))
-                    continue
+                    }, []
 
                 faces = self.face_extractor.extract_faces_from_image(image_path)
                 
                 if not faces:
-                    results[idx] = {
+                    return idx, {
                         'file_path': image_path,
                         'is_fake': False,
                         'fake_probability': 0.0,
                         'frames_processed': 0,
                         'error': 'No faces detected.'
-                    }
-                    image_face_map.append((idx, 0))
-                    continue
+                    }, []
 
-                # Preprocess faces
                 current_image_faces = []
                 for face_img in faces:
                     pil_img = Image.fromarray(face_img)
                     tensor_img = self.transform(pil_img)
                     current_image_faces.append(tensor_img)
                 
-                all_processed_faces.extend(current_image_faces)
-                image_face_map.append((idx, len(current_image_faces)))
+                return idx, None, current_image_faces
                 
             except Exception as e:
-                results[idx] = {
+                return idx, {
                     'file_path': image_path,
                     'is_fake': False,
                     'fake_probability': 0.0,
                     'frames_processed': 0,
                     'error': str(e)
-                }
-                image_face_map.append((idx, 0))
+                }, []
+
+        # 1. Extract and preprocess faces in parallel since MTCNN (PyTorch) is thread-safe
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(image_paths), 16)) as executor:
+            futures = [executor.submit(process_image, idx, path) for idx, path in enumerate(image_paths)]
+            
+            processed_results = [future.result() for future in concurrent.futures.as_completed(futures)]
+            processed_results.sort(key=lambda x: x[0])
+            
+            for idx, err_result, current_image_faces in processed_results:
+                if err_result is not None:
+                    results[idx] = err_result
+                    image_face_map.append((idx, 0))
+                else:
+                    all_processed_faces.extend(current_image_faces)
+                    image_face_map.append((idx, len(current_image_faces)))
 
         # If no faces found in any images
         if not all_processed_faces:
