@@ -82,7 +82,12 @@ class FaceExtractor:
         # predictor_path is ignored now since we use MTCNN
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         # Initialize MTCNN. select_largest=True ensures it returns the biggest face first.
-        self.mtcnn = MTCNN(keep_all=True, select_largest=True, device=self.device)
+        # Adding margin to avoid cutting off face edges during crop
+        # image_size=160 and margin=14 are standard optimizations for MTCNN speed
+        self.mtcnn = MTCNN(
+            image_size=160, margin=14, keep_all=True, 
+            select_largest=True, device=self.device
+        )
 
     def extract_faces(self, video_path, num_frames=30):
         """
