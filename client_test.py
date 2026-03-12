@@ -23,8 +23,8 @@ benchmark of the server's throughput and parallel face extraction.
 API_URL = "http://127.0.0.1:8001/detect_images"
 
 # Optimal settings for an RTX 3090 + 64 Core CPU
-BATCH_SIZE = 64
-CONCURRENT_REQUESTS = 6
+BATCH_SIZE = 32
+CONCURRENT_REQUESTS = 4
 
 def chunker(seq, size):
     """Yield successive chunks from seq."""
