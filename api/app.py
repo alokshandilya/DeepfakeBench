@@ -218,7 +218,7 @@ async def detect_deepfake_images(files: List[UploadFile] = File(...)):
         raise HTTPException(status_code=503, detail="Model not initialized.")
 
     # Limit batch size to prevent OOM or timeouts
-    MAX_BATCH_SIZE = 15
+    MAX_BATCH_SIZE = 64
     if len(files) > MAX_BATCH_SIZE:
         raise HTTPException(status_code=400, detail=f"Batch size limit exceeded. Maximum {MAX_BATCH_SIZE} images allowed.")
 
