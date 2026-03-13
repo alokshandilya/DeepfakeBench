@@ -222,34 +222,31 @@ async def detect_deepfake_images(files: List[UploadFile] = File(...)):
     if len(files) > MAX_BATCH_SIZE:
         raise HTTPException(status_code=400, detail=f"Batch size limit exceeded. Maximum {MAX_BATCH_SIZE} images allowed.")
 
-    temp_paths = []
-
     try:
-        # Save all files first
-        print(f"Batch processing started for {len(files)} images.")
+        print(f"Batch processing started for {len(files)} images (in-memory).")
+        
+        items = []
         for file in files:
-            suffix = os.path.splitext(file.filename)[1] if file.filename else ".jpg"
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-            try:
-                shutil.copyfileobj(file.file, temp_file)
-                temp_paths.append(temp_file.name)
-            finally:
-                temp_file.close()
+            file_bytes = await file.read()
+            items.append({
+                'bytes': file_bytes,
+                'filename': file.filename or 'unknown'
+            })
 
         # Run batch prediction
-        # The detector.predict_batch method handles the logic
-        results = detector.predict_batch(temp_paths)
+        results = detector.predict_batch(items)
 
         # Map results back to original filenames for clarity
         final_response = []
         for idx, res in enumerate(results):
             if res is None: 
-                res = {'error': 'Unknown error', 'file_path': temp_paths[idx]}
+                res = {'error': 'Unknown error', 'file_path': items[idx]['filename']}
             
             # Add original filename to response
-            res['filename'] = files[idx].filename
+            res['filename'] = items[idx]['filename']
             final_response.append(res)
 
+        print(f"Batch processing finished.")
         return final_response
 
     except HTTPException as he:
@@ -258,17 +255,6 @@ async def detect_deepfake_images(files: List[UploadFile] = File(...)):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error processing batch: {str(e)}")
-    finally:
-        # Cleanup all temp files
-        cleaned_count = 0
-        for path in temp_paths:
-            if os.path.exists(path):
-                try:
-                    os.remove(path)
-                    cleaned_count += 1
-                except Exception:
-                    pass
-        print(f"Batch processing finished. Cleaned up {cleaned_count} temp files.")
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))

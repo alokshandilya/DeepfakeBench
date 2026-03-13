@@ -258,38 +258,44 @@ class DeepfakeDetector:
                 'error': f"Inference failed: {str(e)}"
             }
 
-    def predict_batch(self, image_paths):
+    def predict_batch(self, items):
         """
-        Run deepfake detection on a batch of image files.
+        Run deepfake detection on a batch of image files or bytes.
         Optimized to run inference on all faces from all images in a single batch.
         
         Args:
-            image_paths (List[str]): List of paths to input images.
+            items (List[dict]): List of dicts, each with 'path' or 'bytes' and 'filename'.
             
         Returns:
             List[dict]: List of result dictionaries corresponding to input images.
         """
-        results = [None] * len(image_paths)
+        results = [None] * len(items)
         all_processed_faces = []
         # Stores (image_index, face_count) to map back results
         image_face_map = [] 
         
-        def process_image(idx, image_path):
+        def process_image(idx, item):
             try:
-                if not os.path.exists(image_path):
-                    return idx, {
-                        'file_path': image_path,
-                        'is_fake': False,
-                        'fake_probability': 0.0,
-                        'frames_processed': 0,
-                        'error': 'File not found.'
-                    }, []
-
-                faces = self.face_extractor.extract_faces_from_image(image_path)
+                image_bytes = item.get('bytes')
+                image_path = item.get('path')
+                filename = item.get('filename', image_path)
+                
+                if image_bytes is not None:
+                    faces = self.face_extractor.extract_faces_from_image(image_bytes=image_bytes)
+                else:
+                    if not os.path.exists(image_path):
+                        return idx, {
+                            'file_path': filename,
+                            'is_fake': False,
+                            'fake_probability': 0.0,
+                            'frames_processed': 0,
+                            'error': 'File not found.'
+                        }, []
+                    faces = self.face_extractor.extract_faces_from_image(image_path=image_path)
                 
                 if not faces:
                     return idx, {
-                        'file_path': image_path,
+                        'file_path': filename,
                         'is_fake': False,
                         'fake_probability': 0.0,
                         'frames_processed': 0,
@@ -305,8 +311,9 @@ class DeepfakeDetector:
                 return idx, None, current_image_faces
                 
             except Exception as e:
+                filename = item.get('filename', item.get('path'))
                 return idx, {
-                    'file_path': image_path,
+                    'file_path': filename,
                     'is_fake': False,
                     'fake_probability': 0.0,
                     'frames_processed': 0,
@@ -314,8 +321,8 @@ class DeepfakeDetector:
                 }, []
 
         # 1. Extract and preprocess faces in parallel since MTCNN (PyTorch) is thread-safe
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(image_paths), 16)) as executor:
-            futures = [executor.submit(process_image, idx, path) for idx, path in enumerate(image_paths)]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(items), 16)) as executor:
+            futures = [executor.submit(process_image, idx, item) for idx, item in enumerate(items)]
             
             processed_results = [future.result() for future in concurrent.futures.as_completed(futures)]
             processed_results.sort(key=lambda x: x[0])
@@ -334,7 +341,7 @@ class DeepfakeDetector:
             for i in range(len(results)):
                 if results[i] is None:
                     results[i] = {
-                        'file_path': image_paths[i],
+                        'file_path': items[i].get('filename', items[i].get('path')),
                         'is_fake': False,
                         'fake_probability': 0.0,
                         'frames_processed': 0,
@@ -366,7 +373,7 @@ class DeepfakeDetector:
                 is_fake = avg_prob > 0.5
                 
                 results[idx] = {
-                    'file_path': image_paths[idx],
+                    'file_path': items[idx].get('filename', items[idx].get('path')),
                     'is_fake': is_fake,
                     'fake_probability': avg_prob,
                     'frames_processed': face_count,
@@ -379,7 +386,7 @@ class DeepfakeDetector:
             for i in range(len(results)):
                 if results[i] is None:
                     results[i] = {
-                        'file_path': image_paths[i],
+                        'file_path': items[i].get('filename', items[i].get('path')),
                         'is_fake': False,
                         'fake_probability': 0.0,
                         'frames_processed': 0,
