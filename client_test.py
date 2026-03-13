@@ -31,33 +31,22 @@ def chunker(seq, size):
     for pos in range(0, len(seq), size):
         yield seq[pos:pos + size]
 
-async def send_batch(session: aiohttp.ClientSession, image_paths: list, batch_idx: int):
+async def send_batch(session: aiohttp.ClientSession, urls: list, batch_idx: int):
     """
-    Sends a single batch of images to the /detect_images endpoint.
-    Uses aiohttp.FormData to handle the multipart/form-data payload.
+    Sends a single batch of image URLs to the /detect_images endpoint.
+    Uses a JSON payload.
     """
     start_time = time.time()
     
-    # Prepare the multipart form data
-    data = aiohttp.FormData()
-    files_to_close = []
-    
-    for path in image_paths:
-        try:
-            f = open(path, 'rb')
-            files_to_close.append(f)
-            # The field name MUST be 'files' to match the FastAPI endpoint signature
-            data.add_field('files', f, filename=os.path.basename(path))
-        except Exception as e:
-            print(f"Error opening file {path}: {e}")
+    payload = {"urls": urls}
             
     try:
         # Send the POST request
-        async with session.post(API_URL, data=data) as response:
+        async with session.post(API_URL, json=payload) as response:
             if response.status == 200:
                 result = await response.json()
                 elapsed = time.time() - start_time
-                print(f"Batch {batch_idx:03d} [{len(image_paths)} images] completed in {elapsed:.2f}s")
+                print(f"Batch {batch_idx:03d} [{len(urls)} URLs] completed in {elapsed:.2f}s")
                 return result
             else:
                 error_text = await response.text()
@@ -66,36 +55,32 @@ async def send_batch(session: aiohttp.ClientSession, image_paths: list, batch_id
     except Exception as e:
         print(f"Batch {batch_idx:03d} Request Exception: {e}")
         return []
-    finally:
-        # Ensure all file handles are closed regardless of success/failure
-        for f in files_to_close:
-            f.close()
 
-async def process_all_images(image_directory: str):
+async def process_all_urls(urls_file: str):
     """
-    Scans the directory, chunks the files, and uses a semaphore to 
+    Reads URLs from a file, chunks them, and uses a semaphore to 
     limit the number of concurrent in-flight requests.
     """
-    # 1. Gather all image files
-    valid_extensions = {'.jpg', '.jpeg', '.png', '.webp'}
-    all_image_paths = []
+    # 1. Gather all URLs
+    all_urls = []
     
-    for filename in os.listdir(image_directory):
-        ext = os.path.splitext(filename)[1].lower()
-        if ext in valid_extensions:
-            all_image_paths.append(os.path.join(image_directory, filename))
+    with open(urls_file, 'r') as f:
+        for line in f:
+            url = line.strip()
+            if url:
+                all_urls.append(url)
             
-    total_images = len(all_image_paths)
-    if total_images == 0:
-        print(f"No valid images found in {image_directory}")
+    total_urls = len(all_urls)
+    if total_urls == 0:
+        print(f"No valid URLs found in {urls_file}")
         return
         
-    print(f"Found {total_images} images to process.")
+    print(f"Found {total_urls} URLs to process.")
     print(f"Using Batch Size: {BATCH_SIZE}")
     print(f"Concurrent Connections: {CONCURRENT_REQUESTS}")
     
     # 2. Split into chunks
-    batches = list(chunker(all_image_paths, BATCH_SIZE))
+    batches = list(chunker(all_urls, BATCH_SIZE))
     total_batches = len(batches)
     print(f"Total batches to process: {total_batches}")
     
@@ -126,12 +111,12 @@ async def process_all_images(image_directory: str):
     print("\n" + "="*40)
     print("BENCHMARK RESULTS")
     print("="*40)
-    print(f"Total Images Processed : {len(final_results)} / {total_images}")
+    print(f"Total URLs Processed   : {len(final_results)} / {total_urls}")
     print(f"Total Time Taken       : {overall_time:.2f} seconds")
     
-    if total_images > 0:
-        throughput = total_images / overall_time
-        print(f"Throughput             : {throughput:.2f} images/second")
+    if total_urls > 0:
+        throughput = total_urls / overall_time
+        print(f"Throughput             : {throughput:.2f} URLs/second")
         
         # Count fakes
         fakes = sum(1 for r in final_results if r.get('is_fake', False))
@@ -148,22 +133,22 @@ async def process_all_images(image_directory: str):
             print("ERROR DETAILS:")
             print("-"*40)
             for err in error_results:
-                filename = err.get('filename') or err.get('file_path', 'Unknown file')
+                filename = err.get('url') or err.get('filename', 'Unknown URL')
                 error_msg = err.get('error', 'Unknown error')
                 print(f"- {filename}: {error_msg}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="DeepfakeBench API Load Tester")
-    parser.add_argument("--dir", type=str, default="test_images", help="Directory containing images to test")
+    parser.add_argument("--file", type=str, default="test_urls.txt", help="Text file containing image URLs (one per line)")
     parser.add_argument("--url", type=str, default=API_URL, help="Full URL to the /detect_images endpoint")
     
     args = parser.parse_args()
     API_URL = args.url
     
-    if not os.path.exists(args.dir):
-        print(f"Error: Directory '{args.dir}' does not exist.")
-        print("Please create it and add some test images.")
+    if not os.path.exists(args.file):
+        print(f"Error: File '{args.file}' does not exist.")
+        print("Please create it and add some test URLs (one per line).")
         exit(1)
         
     # Run the asyncio event loop
-    asyncio.run(process_all_images(args.dir))
+    asyncio.run(process_all_urls(args.file))

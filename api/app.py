@@ -2,6 +2,9 @@ import os
 import shutil
 import tempfile
 from typing import List
+import asyncio
+import aiohttp
+from pydantic import BaseModel, HttpUrl
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from contextlib import asynccontextmanager
 import uvicorn
@@ -202,14 +205,17 @@ async def detect_deepfake_image(file: UploadFile = File(...)):
             os.remove(temp_path)
             print(f"Cleaned up temp file: {temp_path}")
 
+class ImageUrlsRequest(BaseModel):
+    urls: List[HttpUrl]
+
 @app.post("/detect_images")
-async def detect_deepfake_images(files: List[UploadFile] = File(...)):
+async def detect_deepfake_images(request: ImageUrlsRequest):
     """
-    Endpoint to detect deepfakes in a batch of images.
-    OPTIMIZED: Processes multiple images in a single batch inference pass.
+    Endpoint to detect deepfakes in a batch of image URLs.
+    OPTIMIZED: Downloads images concurrently and processes them in a single batch inference pass.
     
     Args:
-        files (List[UploadFile]): List of image files uploaded via multipart/form-data.
+        request (ImageUrlsRequest): JSON object containing a list of image URLs.
         
     Returns:
         JSON array of results for each image.
@@ -217,34 +223,59 @@ async def detect_deepfake_images(files: List[UploadFile] = File(...)):
     if detector is None:
         raise HTTPException(status_code=503, detail="Model not initialized.")
 
+    urls = request.urls
     # Limit batch size to prevent OOM or timeouts
     MAX_BATCH_SIZE = 64
-    if len(files) > MAX_BATCH_SIZE:
+    if len(urls) > MAX_BATCH_SIZE:
         raise HTTPException(status_code=400, detail=f"Batch size limit exceeded. Maximum {MAX_BATCH_SIZE} images allowed.")
 
     try:
-        print(f"Batch processing started for {len(files)} images (in-memory).")
+        print(f"Batch processing started for {len(urls)} image URLs (in-memory).")
         
-        items = []
-        for file in files:
-            file_bytes = await file.read()
-            items.append({
-                'bytes': file_bytes,
-                'filename': file.filename or 'unknown'
-            })
+        async def fetch_image(session, url: str):
+            try:
+                async with session.get(url, timeout=10) as response:
+                    if response.status == 200:
+                        file_bytes = await response.read()
+                        filename = url.split("/")[-1].split("?")[0]
+                        if not filename:
+                            filename = "unknown.jpg"
+                        return {'bytes': file_bytes, 'filename': filename, 'url': url}
+                    else:
+                        return {'error': f"HTTP {response.status}", 'filename': url, 'url': url}
+            except Exception as e:
+                return {'error': str(e), 'filename': url, 'url': url}
 
-        # Run batch prediction
-        results = detector.predict_batch(items)
+        async with aiohttp.ClientSession() as session:
+            tasks = [fetch_image(session, str(url)) for url in urls]
+            fetched_results = await asyncio.gather(*tasks)
 
-        # Map results back to original filenames for clarity
+        items = [res for res in fetched_results if 'bytes' in res]
+        error_results = [res for res in fetched_results if 'error' in res]
+
         final_response = []
-        for idx, res in enumerate(results):
-            if res is None: 
-                res = {'error': 'Unknown error', 'file_path': items[idx]['filename']}
-            
-            # Add original filename to response
-            res['filename'] = items[idx]['filename']
-            final_response.append(res)
+        
+        if items:
+            # Run batch prediction
+            results = detector.predict_batch(items)
+
+            # Map results back to original filenames for clarity
+            for idx, res in enumerate(results):
+                if res is None: 
+                    res = {'error': 'Unknown error'}
+                
+                # Add original filename and url to response
+                res['filename'] = items[idx]['filename']
+                res['url'] = items[idx]['url']
+                final_response.append(res)
+                
+        # Add error results back
+        for err in error_results:
+            final_response.append({
+                'error': err['error'],
+                'filename': err['filename'],
+                'url': err['url']
+            })
 
         print(f"Batch processing finished.")
         return final_response
