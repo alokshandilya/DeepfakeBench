@@ -321,7 +321,8 @@ class DeepfakeDetector:
                 }, []
 
         # 1. Extract and preprocess faces in parallel since MTCNN (PyTorch) is thread-safe
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(items), 16)) as executor:
+        # Limit max_workers to prevent libgomp thread exhaustion and CUDA context errors with multiple Uvicorn workers
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(items), 2)) as executor:
             futures = [executor.submit(process_image, idx, item) for idx, item in enumerate(items)]
             
             processed_results = [future.result() for future in concurrent.futures.as_completed(futures)]
